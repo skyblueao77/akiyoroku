@@ -16,17 +16,19 @@ class AmbientSoundEngine {
   private fireGain: GainNode | null = null;
   private rainGain: GainNode | null = null;
 
-  private cricketInterval: any = null;
-  private fireInterval: any = null;
+  private cricketInterval: ReturnType<typeof setInterval> | null = null;
+  private fireInterval: ReturnType<typeof setInterval> | null = null;
   private rainNode: AudioNode | null = null;
 
   private initContext() {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      this.ctx = new AudioCtx();
+      if (AudioCtx) {
+        this.ctx = new AudioCtx();
+      }
     }
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume();
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
     }
   }
 
@@ -37,7 +39,10 @@ class AmbientSoundEngine {
 
     if (!enable) {
       this.isPlayingCricket = false;
-      if (this.cricketInterval) clearInterval(this.cricketInterval);
+      if (this.cricketInterval) {
+        clearInterval(this.cricketInterval);
+        this.cricketInterval = null;
+      }
       if (this.cricketGain) {
         this.cricketGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2);
       }
@@ -81,6 +86,7 @@ class AmbientSoundEngine {
     };
 
     playChirp();
+    if (this.cricketInterval) clearInterval(this.cricketInterval);
     this.cricketInterval = setInterval(() => {
       if (Math.random() > 0.3) {
         playChirp();
@@ -95,7 +101,10 @@ class AmbientSoundEngine {
 
     if (!enable) {
       this.isPlayingFire = false;
-      if (this.fireInterval) clearInterval(this.fireInterval);
+      if (this.fireInterval) {
+        clearInterval(this.fireInterval);
+        this.fireInterval = null;
+      }
       if (this.fireGain) {
         this.fireGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.2);
       }
@@ -113,7 +122,7 @@ class AmbientSoundEngine {
     const playPop = () => {
       if (!this.ctx || !this.isPlayingFire || !this.fireGain) return;
       const now = this.ctx.currentTime;
-      const bufferSize = this.ctx.sampleRate * 0.04;
+      const bufferSize = Math.floor(this.ctx.sampleRate * 0.04);
       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
       const output = buffer.getChannelData(0);
       for (let i = 0; i < bufferSize; i++) {
@@ -138,6 +147,7 @@ class AmbientSoundEngine {
       whiteNoise.start(now);
     };
 
+    if (this.fireInterval) clearInterval(this.fireInterval);
     this.fireInterval = setInterval(() => {
       const bursts = Math.floor(Math.random() * 3);
       for (let i = 0; i < bursts; i++) {
@@ -153,10 +163,26 @@ class AmbientSoundEngine {
 
     if (!enable) {
       this.isPlayingRain = false;
+      if (this.rainNode) {
+        try {
+          (this.rainNode as AudioScheduledSourceNode).stop();
+          this.rainNode.disconnect();
+        } catch {}
+        this.rainNode = null;
+      }
       if (this.rainGain) {
         this.rainGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.3);
       }
       return;
+    }
+
+    // Stop any existing rain node before starting new one to prevent accumulation
+    if (this.rainNode) {
+      try {
+        (this.rainNode as AudioScheduledSourceNode).stop();
+        this.rainNode.disconnect();
+      } catch {}
+      this.rainNode = null;
     }
 
     this.isPlayingRain = true;

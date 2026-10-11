@@ -81,11 +81,23 @@ export const AmbientPlayer: React.FC<AmbientPlayerProps> = ({
     setIsTimerRunning(false);
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-96 bg-[#161310] border-l border-[#2e261f] shadow-2xl flex flex-col justify-between overflow-y-auto">
-      <div className="p-6">
+    <>
+      {/* Backdrop overlay */}
+      {isOpen && (
+        <div
+          onClick={onClose}
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs transition-opacity"
+        />
+      )}
+
+      {/* Drawer */}
+      <div
+        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-96 bg-[#161310] border-l border-[#2e261f] shadow-2xl flex flex-col justify-between overflow-y-auto transition-transform duration-300 ease-in-out ${
+          isOpen ? 'translate-x-0' : 'translate-x-full pointer-events-none'
+        }`}
+      >
+        <div className="p-6">
         <div className="flex items-center justify-between pb-4 border-b border-[#2d251e]">
           <div className="flex items-center gap-2">
             <Moon className="w-5 h-5 text-amber-400" />
@@ -283,5 +295,6 @@ export const AmbientPlayer: React.FC<AmbientPlayerProps> = ({
         </p>
       </div>
     </div>
-  );
+  </>
+);
 };

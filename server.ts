@@ -1,3 +1,4 @@
+import http from "http";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -13,13 +14,23 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Trust Cloud Run / reverse proxy for accurate client IP resolution
+app.set("trust proxy", 1);
+
+// Security headers (safe for iframe embedding in AI Studio)
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+
 // Rate limiting configuration to mitigate DoS / CWE-770 / CWE-400
-// Applies to all incoming requests including static file access and API routes
+// General limiter applies to static and app requests
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 300, // Limit each IP to 300 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  max: 1500, // Generous limit for SPA asset chunks and navigation
+  standardHeaders: true,
+  legacyHeaders: false,
   message: {
     error: "リクエスト数が上限に達しました。しばらく時間をおいてから再度お試しください。",
   },
@@ -38,7 +49,7 @@ const apiLimiter = rateLimit({
 
 app.use(generalLimiter);
 app.use("/api", apiLimiter);
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "2mb" })); // Safe bounded payload limit
 
 // Fallback recommendations if Gemini API is temporarily unavailable
 const FALLBACK_RECOMMENDATIONS = [
@@ -105,10 +116,36 @@ if (process.env.GEMINI_API_KEY) {
   });
 }
 
+// Helper to safely strip markdown code blocks before JSON parsing
+function safeParseJson(rawText: string | undefined, fallback: any = {}): any {
+  if (!rawText) return fallback;
+  try {
+    let clean = rawText.trim();
+    if (clean.startsWith("```json")) {
+      clean = clean.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+    } else if (clean.startsWith("```")) {
+      clean = clean.replace(/^```\s*/, "").replace(/\s*```$/, "");
+    }
+    return JSON.parse(clean);
+  } catch (e) {
+    console.warn("JSON parse fallback triggered:", e);
+    return fallback;
+  }
+}
+
 // AI Recommendation API
 app.post("/api/recommend", async (req, res) => {
   try {
-    const { logs, mood, mediaType, favoriteThemes } = req.body;
+    const { logs, mood, mediaType, favoriteThemes } = req.body || {};
+
+    const safeLogs = Array.isArray(logs) ? logs.slice(0, 15) : [];
+    const safeMood = typeof mood === "string" ? mood.trim().slice(0, 300) : "秋の静けさと深い余韻を楽しみたい";
+    const safeMediaType =
+      mediaType === "book" || mediaType === "movie" || mediaType === "both"
+        ? mediaType
+        : "both";
+    const safeThemes =
+      typeof favoriteThemes === "string" ? favoriteThemes.trim().slice(0, 300) : "";
 
     if (!ai) {
       return res.json({
@@ -123,18 +160,17 @@ app.post("/api/recommend", async (req, res) => {
 提案は具体的かつ魅力的で、なぜ今この作品が合うのかの納得感と、秋の夜長を彩るペアリング（お茶、ホットドリンク、香料など）も添えてください。`;
 
     const prompt = `
-ユーザーの現在の気分・テーマ: ${mood || "秋の静けさと深い余韻を楽しみたい"}
-希望のメディア種別: ${mediaType || "both"} (book, movie, or both)
-関心のあるテーマ/興味: ${favoriteThemes || "未指定"}
+ユーザーの現在の気分・テーマ: ${safeMood}
+希望のメディア種別: ${safeMediaType} (book, movie, or both)
+関心のあるテーマ/興味: ${safeThemes || "未指定"}
 
-ユーザーの既存の読書・鑑賞記録 (${logs?.length || 0}件):
+ユーザーの既存の読書・鑑賞記録 (${safeLogs.length}件):
 ${
-  logs && logs.length > 0
-    ? logs
-        .slice(0, 10)
+  safeLogs.length > 0
+    ? safeLogs
         .map(
           (l: any) =>
-            `- [${l.type === "book" ? "書籍" : "映画"}] 『${l.title}』 (${l.creator || "作者不明"}) / 評価: ${l.rating}/5 / 感想要約: ${l.notes || "なし"}`
+            `- [${l?.type === "book" ? "書籍" : "映画"}] 『${String(l?.title || "無題").slice(0, 50)}』 (${String(l?.creator || "作者不明").slice(0, 30)}) / 評価: ${Number(l?.rating) || 0}/5 / 感想要約: ${String(l?.notes || "なし").slice(0, 80)}`
         )
         .join("\n")
     : "まだ記録がありません。秋の夜長に最適な定番・隠れた名作からおすすめしてください。"
@@ -214,8 +250,16 @@ ${
       },
     });
 
-    const result = JSON.parse(response.text || "{}");
-    res.json(result);
+    const parsed = safeParseJson(response.text, {
+      analysisSummary: "秋の静けさと深い余韻に浸れる珠玉の作品たちをご案内します。",
+      recommendations: FALLBACK_RECOMMENDATIONS,
+    });
+
+    if (!Array.isArray(parsed.recommendations) || parsed.recommendations.length === 0) {
+      parsed.recommendations = FALLBACK_RECOMMENDATIONS;
+    }
+
+    res.json(parsed);
   } catch (error: any) {
     console.error("Recommend error, using fallback:", error);
     res.json({
@@ -228,11 +272,13 @@ ${
 // Taste Analysis API
 app.post("/api/analyze-taste", async (req, res) => {
   try {
-    const { logs } = req.body;
+    const { logs } = req.body || {};
 
-    if (!logs || logs.length === 0) {
+    if (!Array.isArray(logs) || logs.length === 0) {
       return res.status(400).json({ error: "No logs provided for analysis" });
     }
+
+    const safeLogs = logs.slice(0, 20);
 
     if (!ai) {
       return res.json({
@@ -254,10 +300,10 @@ app.post("/api/analyze-taste", async (req, res) => {
 
     const prompt = `
 ユーザーの読書・映画鑑賞ログ:
-${logs
+${safeLogs
   .map(
     (l: any) =>
-      `- [${l.type === "book" ? "本" : "映画"}] 『${l.title}』(${l.creator}) / 評価: ${l.rating}点 / お気に入り度: ${l.favorite ? "★本命" : "通常"} / メモ・引用: ${l.quote || ""} ${l.notes || ""}`
+      `- [${l?.type === "book" ? "本" : "映画"}] 『${String(l?.title || "無題").slice(0, 50)}』(${String(l?.creator || "").slice(0, 30)}) / 評価: ${Number(l?.rating) || 0}点 / お気に入り度: ${l?.favorite ? "★本命" : "通常"} / メモ・引用: ${String(l?.quote || "").slice(0, 60)} ${String(l?.notes || "").slice(0, 60)}`
   )
   .join("\n")}
 
@@ -314,8 +360,21 @@ ${logs
       },
     });
 
-    const result = JSON.parse(response.text || "{}");
-    res.json(result);
+    const parsed = safeParseJson(response.text, {
+      personaTitle: "秋夜の思索人",
+      summary: "日常の喧騒から離れ、言葉や映像の行間に宿る深淵な美しさに心惹かれる豊かな感性の持ち主です。",
+      radarAttributes: [
+        { label: "叙情性", score: 90 },
+        { label: "知的好奇心", score: 85 },
+        { label: "余韻の深さ", score: 92 },
+        { label: "映像美", score: 88 },
+        { label: "世界観の没入度", score: 94 },
+      ],
+      autumnNightAdvice: "静かな秋の夜風を感じながら、一杯の温かい飲み物とともに心ゆくまで物語の世界に沈潜してみてください。",
+      recommendedGenres: ["文芸ドラマ", "心理サスペンス", "幻想文学", "クラシック"],
+    });
+
+    res.json(parsed);
   } catch (error: any) {
     console.error("Analyze taste error, using fallback:", error);
     res.json({
@@ -337,18 +396,21 @@ ${logs
 // Auto-complete / Metadata search API
 app.post("/api/autocomplete", async (req, res) => {
   try {
-    const { title, type } = req.body;
-    if (!title) {
+    const { title, type } = req.body || {};
+    if (!title || typeof title !== "string" || !title.trim()) {
       return res.status(400).json({ error: "Title is required" });
     }
 
+    const safeTitle = title.trim().slice(0, 100);
+    const safeType = type === "book" || type === "movie" ? type : "unknown";
+
     if (!ai) {
       return res.json({
-        title,
-        creator: type === "book" ? "作者不明" : "監督不明",
-        genre: type === "book" ? "文芸・小説" : "ドラマ",
-        durationOrPages: type === "book" ? "300頁" : "110分",
-        synopsis: `${title}。秋の夜長にじっくりと味わいたい味わい深い作品。`,
+        title: safeTitle,
+        creator: safeType === "book" ? "作者不明" : "監督不明",
+        genre: safeType === "book" ? "文芸・小説" : "ドラマ",
+        durationOrPages: safeType === "book" ? "300頁" : "110分",
+        synopsis: `${safeTitle}。秋の夜長にじっくりと味わいたい味わい深い作品。`,
         suggestedTags: ["秋の夜長", "名作", "余韻"],
         autumnFittingScore: 4,
       });
@@ -356,7 +418,7 @@ app.post("/api/autocomplete", async (req, res) => {
 
     const response = await ai.models.generateContent({
       model: "gemini-3.8-flash",
-      contents: `作品タイトル: 「${title}」 (種別: ${type || "不明"}) について、正確な作者/監督、ジャンル、概要（80〜100字）、推定所要時間（上映時間または読書所要目安/ページ数）、心に響くキーワードを補完してください。実在する著名な作品であれば正確に、曖昧な場合は一般的な文脈で補ってください。`,
+      contents: `作品タイトル: 「${safeTitle}」 (種別: ${safeType}) について、正確な作者/監督、ジャンル、概要（80〜100字）、推定所要時間（上映時間または読書所要目安/ページ数）、心に響くキーワードを補完してください。実在する著名な作品であれば正確に、曖昧な場合は一般的な文脈で補ってください。`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -381,15 +443,24 @@ app.post("/api/autocomplete", async (req, res) => {
       },
     });
 
-    const result = JSON.parse(response.text || "{}");
-    res.json(result);
+    const parsed = safeParseJson(response.text, {
+      title: safeTitle,
+      creator: safeType === "book" ? "作者" : "監督",
+      genre: "文学・ドラマ",
+      durationOrPages: safeType === "book" ? "280頁" : "115分",
+      synopsis: "秋の夜長に静かに浸りたい、深い思索と余韻をもたらす作品。",
+      suggestedTags: ["秋の夜長", "おすすめ"],
+      autumnFittingScore: 4,
+    });
+
+    res.json(parsed);
   } catch (error: any) {
     console.error("Autocomplete error, using fallback:", error);
     res.json({
-      title: req.body.title || "作品名",
-      creator: req.body.type === "book" ? "作者" : "監督",
+      title: req.body?.title || "作品名",
+      creator: req.body?.type === "book" ? "作者" : "監督",
       genre: "文学・ドラマ",
-      durationOrPages: req.body.type === "book" ? "280頁" : "115分",
+      durationOrPages: req.body?.type === "book" ? "280頁" : "115分",
       synopsis: "秋の夜長に静かに浸りたい、深い思索と余韻をもたらす作品。",
       suggestedTags: ["秋の夜長", "おすすめ"],
       autumnFittingScore: 4,
@@ -399,11 +470,24 @@ app.post("/api/autocomplete", async (req, res) => {
 
 // Setup Vite in development or serve static in production
 async function startServer() {
+  const httpServer = http.createServer(app);
   const isProd = process.env.NODE_ENV === "production";
+
+  // Prevent crashing on malformed client requests or abrupt socket closes
+  httpServer.on("clientError", (_err, socket) => {
+    if (!socket.destroyed) {
+      socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+    }
+  });
+
   if (!isProd) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        // Bind HMR websocket upgrade handler to httpServer when HMR is enabled
+        hmr: process.env.DISABLE_HMR === "true" ? false : { server: httpServer },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -415,7 +499,7 @@ async function startServer() {
     });
   }
 
-  app.listen(port, () => {
+  httpServer.listen(port, () => {
     console.log(`Server listening on http://localhost:${port}`);
   });
 }

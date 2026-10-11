@@ -83,6 +83,17 @@ export default function App() {
   const [isAmbientDrawerOpen, setIsAmbientDrawerOpen] = useState(false);
   const [isAmbientActive, setIsAmbientActive] = useState(false);
 
+  // In-app non-blocking notifications & confirmation modals
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [deletingLogId, setDeletingLogId] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((current) => (current === msg ? null : current));
+    }, 3200);
+  };
+
   // Filters & Search
   const [filterType, setFilterType] = useState<'all' | 'book' | 'movie'>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -126,22 +137,38 @@ export default function App() {
   const handleSaveLog = (newOrUpdated: LogItem) => {
     if (editingLog) {
       setLogs(logs.map((l) => (l.id === newOrUpdated.id ? newOrUpdated : l)));
+      showToast(`『${newOrUpdated.title}』を更新しました`);
     } else {
       setLogs([newOrUpdated, ...logs]);
+      showToast(`『${newOrUpdated.title}』を記録しました`);
     }
     setEditingLog(null);
   };
 
   const handleDeleteLog = (id: string) => {
-    if (window.confirm('この作品の記録を削除してもよろしいですか？')) {
-      setLogs(logs.filter((l) => l.id !== id));
-      setCanvasElements(canvasElements.filter((e) => e.logId !== id));
+    setDeletingLogId(id);
+  };
+
+  const confirmDeleteLog = () => {
+    if (deletingLogId) {
+      const target = logs.find((l) => l.id === deletingLogId);
+      setLogs(logs.filter((l) => l.id !== deletingLogId));
+      setCanvasElements(canvasElements.filter((e) => e.logId !== deletingLogId));
+      setDeletingLogId(null);
+      showToast(`『${target?.title || '作品'}』を削除しました`);
     }
   };
 
   const handleToggleFavorite = (id: string) => {
     setLogs(
-      logs.map((l) => (l.id === id ? { ...l, favorite: !l.favorite } : l))
+      logs.map((l) => {
+        if (l.id === id) {
+          const next = !l.favorite;
+          showToast(next ? `『${l.title}』をお気に入りに追加しました` : `『${l.title}』のお気に入りを解除しました`);
+          return { ...l, favorite: next };
+        }
+        return l;
+      })
     );
   };
 
@@ -168,11 +195,12 @@ export default function App() {
       favorite: false,
     };
     setLogs([newLog, ...logs]);
+    showToast(`『${item.title}』を積読・観たいリストに追加しました`);
   };
 
   const handleAddLogToCanvas = (log: LogItem) => {
     if (canvasElements.some((e) => e.logId === log.id)) {
-      alert('この作品は既にキャンバスに配置されています');
+      showToast('この作品は既にキャンバスに配置されています');
       setCurrentTab('canvas');
       return;
     }
@@ -187,6 +215,7 @@ export default function App() {
       rotation: (Math.random() - 0.5) * 5,
     };
     setCanvasElements([...canvasElements, newCard]);
+    showToast(`『${log.title}』をキャンバスに追加しました`);
     setCurrentTab('canvas');
   };
 
@@ -478,6 +507,45 @@ export default function App() {
         onClose={() => setIsTasteProfileModalOpen(false)}
         logs={logs}
       />
+
+      {/* Delete Confirmation Modal (avoids window.confirm in iframe) */}
+      {deletingLogId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="bg-[#181410] border border-[#382b20] rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-serif font-bold text-amber-100">
+              作品記録の削除
+            </h3>
+            <p className="text-xs text-stone-300 leading-relaxed">
+              『{logs.find((l) => l.id === deletingLogId)?.title || 'この作品'}』の記録を削除してもよろしいですか？
+              キャンバスに配置されたカードも同時に削除されます。
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingLogId(null)}
+                className="px-4 py-2 text-xs text-stone-300 hover:text-stone-100 bg-[#221c16] rounded-xl border border-[#33281e] transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteLog}
+                className="px-4 py-2 text-xs font-medium text-white bg-rose-700 hover:bg-rose-600 rounded-xl transition-colors shadow-sm"
+              >
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Non-blocking Toast Feedback Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1c1611]/95 border border-amber-600/40 text-amber-100 text-xs sm:text-sm px-5 py-2.5 rounded-full shadow-2xl backdrop-blur-md flex items-center gap-2 animate-fade-in">
+          <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </div>
   );
 }

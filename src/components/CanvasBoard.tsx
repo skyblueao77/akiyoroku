@@ -34,6 +34,14 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = ({
   const [boardTheme, setBoardTheme] = useState<'study' | 'amber' | 'paper' | 'cinema'>('study');
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const showNotice = (msg: string) => {
+    setNotice(msg);
+    setTimeout(() => {
+      setNotice((current) => (current === msg ? null : current));
+    }, 3000);
+  };
 
   // Add new sticky note
   const handleAddSticky = () => {
@@ -71,7 +79,7 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = ({
   // Add card from logs
   const handleAddLogCard = (logId: string) => {
     if (elements.some((e) => e.logId === logId)) {
-      alert('この作品は既にキャンバスに配置されています');
+      showNotice('この作品は既にキャンバスに配置されています');
       return;
     }
     const newCard: CanvasElement = {
@@ -435,6 +443,19 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Notice notification */}
+      {notice && (
+        <div className="bg-amber-950/60 border border-amber-600/40 text-amber-200 text-xs px-4 py-2 rounded-xl flex items-center justify-between shadow-md">
+          <span>{notice}</span>
+          <button
+            onClick={() => setNotice(null)}
+            className="text-stone-400 hover:text-stone-200 ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Selected Element Action Bar (if an item is selected) */}
       {selectedElement && (
