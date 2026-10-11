@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -12,6 +13,31 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Rate limiting configuration to mitigate DoS / CWE-770 / CWE-400
+// Applies to all incoming requests including static file access and API routes
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 300, // Limit each IP to 300 requests per windowMs
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  message: {
+    error: "リクエスト数が上限に達しました。しばらく時間をおいてから再度お試しください。",
+  },
+});
+
+// Stricter rate limiting for AI API endpoints
+const apiLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 60, // Limit each IP to 60 API requests per 5 minutes
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: "APIリクエスト制限に達しました。少し時間を置いて再試行してください。",
+  },
+});
+
+app.use(generalLimiter);
+app.use("/api", apiLimiter);
 app.use(express.json({ limit: "10mb" }));
 
 // Fallback recommendations if Gemini API is temporarily unavailable
@@ -384,7 +410,7 @@ async function startServer() {
   } else {
     const distPath = path.resolve(__dirname, "dist");
     app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
+    app.get("*", generalLimiter, (_req, res) => {
       res.sendFile(path.resolve(distPath, "index.html"));
     });
   }
