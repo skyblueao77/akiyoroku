@@ -1,0 +1,6 @@
+{
+  "name": "秋夜録 - 秋の夜長 読書＆シネマログ・AIレコメンド",
+  "description": "秋の夜長に読書と映画鑑賞をもっと豊かに。好みのAI分析とレコメンド、自由なカスタムログ、そしてCanvasによるビジュアルボード機能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
